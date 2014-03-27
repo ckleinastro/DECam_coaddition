@@ -1,7 +1,7 @@
 import sys
 from os import system, listdir, path
 import pyfits
-from scipy import loadtxt, sqrt, median, array, where, hypot, zeros, cos
+from scipy import loadtxt, sqrt, median, array, where, zeros, cos, hypot
 import time
 import ephem
 import pickle
@@ -24,7 +24,8 @@ print "Starting coaddition of " + query_field + "-" + query_chip + "."
 start_time = time.time()
 
 """ Local laptop testing and development modification. """
-if socket.gethostname() == "Christopher-Kleins-MacBook-Pro.local":
+if socket.gethostname() == "Christopher-Kleins-MacBook-Pro.local" or           \
+    socket.gethostname()[:8] == "airbears":
     coadd_directory = "/Users/cklein/Desktop/Ongoing_Research/DECam_Science_Verification/create_relative_coadds/"
     #### Define the paths to the sex and swarp bins on my laptop.
     SEXCMD = "sex"
@@ -47,7 +48,8 @@ image_path_list = imagefile_dict[query_field][query_chip]
 
 
 """ Local laptop testing and development modification. """
-if socket.gethostname() == "Christopher-Kleins-MacBook-Pro.local":
+if socket.gethostname() == "Christopher-Kleins-MacBook-Pro.local" or           \
+    socket.gethostname()[:8] == "airbears":
     for n in range(len(image_path_list)):
         image_path_list[n] = "/Volumes/Extra_HDD/Research/DECam_Data" +        \
             image_path_list[n]
@@ -147,7 +149,7 @@ for image_path in image_path_list:
 ####    Final major step is to select the best candidate calibration stars in 
 ####    the combined coverage of all the filed-chip images.
 # Define median Absolute Deviation clipping for input array of numbers.
-def mad_clipping(input_data, sigma_clip_level):
+def mad_clipping(input_data, sigma_clip_level, return_length=False):
     medval = median(input_data)
     sigma = 1.4826 * median(abs(medval - input_data))
     high_sigma_clip_limit = medval + sigma_clip_level * sigma
@@ -156,7 +158,10 @@ def mad_clipping(input_data, sigma_clip_level):
                               (input_data<(high_sigma_clip_limit))]
     new_medval = median(clipped_data)
     new_sigma = 1.4826 * median(abs(medval - clipped_data))
-    return new_medval, new_sigma
+    if return_length:
+        return new_medval, new_sigma, len(clipped_data)
+    else:
+        return new_medval, new_sigma
 min_epochs_limit = int(len(image_path_list) * (2.0/3.0))
 
 light_curve_data = []
@@ -301,10 +306,9 @@ for image_path in image_path_list:
         epoch_psf_izp_list.append([phot_cat_path, 0, 0])
         epoch_aper_izp_list.append([phot_cat_path, 0, 0])
 
-# Now create final zeropoint data to by using the intermediate zeropoint values
+# Now create final zeropoint data by using the intermediate zeropoint values
 # to identify candidate calibrators that are variable, and also by rejecting
 # from the stack (and later coaddition) images that are of poor quality.
-
 output_region_file = file(coadd_directory + query_field + "-" + query_chip +   \
                           "_candidate_calibrators.reg", "w")
 output_region_file.write("global color=blue dashlist=8 3 width=1 " + 
@@ -315,12 +319,14 @@ psf_mag_sigma_list = []
 aper_mag_sigma_list = []
 psf_mag_medval_list = []
 aper_mag_medval_list = []
+calibrator_ra = []
+calibrator_dec = []
 for curve_data in light_curve_data:
     if (len(curve_data[2]) >= min_epochs_limit) and                            \
                                  (best_epoch_name in array(curve_data[2])[:,0]):
         ra = curve_data[0]
         dec = curve_data[1]
-        curve = curve_data[2]
+        # curve = curve_data[2]
         # phot_cat, MAG_PSF, MAGERR_PSF, MAG_APER[20], MAGERR_APER[20]
         phot_cat_list = []
         mag_psf_list = []
@@ -378,7 +384,60 @@ for curve_data in light_curve_data:
             output_region_file.write(('''circle(%f,%f,1") # color=blue ''' +   \
                     "width=1 text={BEST_MAG_PSF=%.3f}\n") % (ra, dec,          \
                                                             best_epoch_mag_psf))
+            calibrator_ra.append(ra)
+            calibrator_dec.append(dec)
 output_region_file.close()
+calibrator_coords = array(zip(calibrator_ra, calibrator_dec))
+
+
+
+for image_path in image_path_list:
+    source_extractor_data = loadtxt(image_path.replace(".fits", ".sexcat"))
+    # Keep only the non-flagged, good detections.
+    #       source_extractor_data[:,29] is the FLAGS column
+    #       source_extractor_data[:,21] is the MAG_PSF column
+    #       source_extractor_data[:,22] is the MAGERR_PSF column
+    sex_ra = source_extractor_data[:,3][(source_extractor_data[:,29]==0) &     \
+                                        (source_extractor_data[:,5]!=0)]
+    sex_dec = source_extractor_data[:,4][(source_extractor_data[:,29]==0) &    \
+                                         (source_extractor_data[:,5]!=0)]
+    sex_mag_psf = source_extractor_data[:,21][(source_extractor_data[:,29]==0) \
+                                            & (source_extractor_data[:,5]!=0)]
+    sex_magerr_psf = source_extractor_data[:,22][                              \
+             (source_extractor_data[:,29]==0) & (source_extractor_data[:,5]!=0)]
+
+    output_calibrator_file = file(image_path.replace(".fits",                  \
+                                                       ".calibrators.txt"), "w")
+    output_region_file = file(image_path.replace(".fits", ".calibrators.reg"), \
+                                                                            "w")
+    output_region_file.write("global color=blue dashlist=8 3 width=1 " + 
+        "font='helvetica 12 bold' select=1 highlite=1 dash=0 fixed=0 edit=1 " + 
+        "move=1 delete=1 include=1 source=1\nfk5\n")
+
+    for n in range(len(sex_ra)):
+        star_ra = sex_ra[n]
+        star_dec = sex_dec[n]
+        
+        distance_array = 3600*hypot(cos(star_dec*0.01745329252)*(star_ra-calibrator_coords[:,0]),            \
+                                    star_dec-calibrator_coords[:,1])
+        # if this detected star is within 2 arcsec of a identified calibrator,
+        # then write it out
+        if distance_array.min() < 2:         
+            star_psfmag_z = sex_mag_psf[n]
+            star_psfmagerr_z = sex_magerr_psf[n]
+            output_region_file.write(('''circle(%f,%f,1") # color=green ''' + 
+                "width=1 text={MAG_PSF=%.3f +/- %.3f}\n") % 
+                (star_ra, star_dec, star_psfmag_z, star_psfmagerr_z))
+            
+            output_calibrator_file.write("%.7f\t%.7f\t%.4f\t%.4f\n" %          \
+                (star_ra, star_dec, star_psfmag_z, star_psfmagerr_z))
+            
+    output_region_file.close()
+    output_calibrator_file.close()
+
+
+
+
 
 # Collect the final zeropoint data by epoch and calculate the median and 
 # associated sigma.
@@ -389,11 +448,14 @@ for image_path in image_path_list:
     if phot_cat_path != best_epoch_name:
         psf_zp_array = array(psf_photometry_zp_dict[phot_cat_path])
         aper_zp_array = array(aper_photometry_zp_dict[phot_cat_path])
-        psf_zp_medval, psf_zp_sigma = mad_clipping(psf_zp_array, 3)
-        aper_zp_medval, aper_zp_sigma = mad_clipping(aper_zp_array, 3)
-        epoch_psf_zp_list.append([phot_cat_path, psf_zp_medval, psf_zp_sigma])
+        psf_zp_medval, psf_zp_sigma, psf_zp_num_calibrators =                  \
+                               mad_clipping(psf_zp_array, 3, return_length=True)
+        aper_zp_medval, aper_zp_sigma, aper_zp_num_calibrators =               \
+                              mad_clipping(aper_zp_array, 3, return_length=True)
+        epoch_psf_zp_list.append([phot_cat_path, psf_zp_medval, 
+                                  psf_zp_sigma/(psf_zp_num_calibrators**0.5)])
         epoch_aper_zp_list.append([phot_cat_path, aper_zp_medval, 
-                                                                 aper_zp_sigma])
+                                  aper_zp_sigma/(aper_zp_num_calibrators**0.5)])
     else:
         epoch_psf_zp_list.append([phot_cat_path, 0, 0])
         epoch_aper_zp_list.append([phot_cat_path, 0, 0])
@@ -473,13 +535,13 @@ system(SWARPCMD + " @" + coadd_directory + query_field + "-" + query_chip +
      query_chip + "_psf_coadd.fits" +  
     " -WEIGHTOUT_NAME " + coadd_directory + query_field + "-" + query_chip +                     
     "_psf_coadd.weight.fits")
-system(SWARPCMD + " @" + coadd_directory + query_field + "-" + query_chip +                      
-    "_swarp_list.txt -c rrl_combine.swarp -FSCALE_KEYWORD FLXSCA-A" +          
-    " -WEIGHT_TYPE MAP_WEIGHT -WEIGHT_IMAGE " + weightmap_image +              
-    " -IMAGEOUT_NAME " + coadd_directory + query_field + "-" + 
-    query_chip + "_aper_coadd.fits" + 
-    " -WEIGHTOUT_NAME  " + coadd_directory + query_field + "-" + query_chip +                    
-    "_aper_coadd.weight.fits")
+# system(SWARPCMD + " @" + coadd_directory + query_field + "-" + query_chip +                      
+#     "_swarp_list.txt -c rrl_combine.swarp -FSCALE_KEYWORD FLXSCA-A" +          
+#     " -WEIGHT_TYPE MAP_WEIGHT -WEIGHT_IMAGE " + weightmap_image +              
+#     " -IMAGEOUT_NAME " + coadd_directory + query_field + "-" + 
+#     query_chip + "_aper_coadd.fits" + 
+#     " -WEIGHTOUT_NAME  " + coadd_directory + query_field + "-" + query_chip +                    
+#     "_aper_coadd.weight.fits")
 
 end_time = time.time()
 print "Successfully completed coaddition of " + query_field + "-" +            \
