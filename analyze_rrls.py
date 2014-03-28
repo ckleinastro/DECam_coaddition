@@ -50,13 +50,15 @@ rrl_datatype = dtype([('ra', 'float'),
                      ('period', 'float'),
                      ('V_mag', 'float'),
                      ('I_mag', 'float'),
-                     ('z_mag', 'float'),
-                     ('z_magerr', 'float')])
+                     ('decam_z_mag', 'float'),
+                     ('decam_z_magerr', 'float'),
+                     ('sdss_z_mag', 'float'),
+                     ('sdss_z_magerr', 'float')])
 rrl_data_flag = False
-for field in range(30):
-    field_str = "1" + "%02d" % (field,)
-    for chip_num in chip_num_list:
-        chip_str = "C%02d" % (chip_num,)
+for chip_num in chip_num_list:
+    chip_str = "C%02d" % (chip_num,)
+    for field in range(30):
+        field_str = "1" + "%02d" % (field,)
         rrl_datafile = coadd_directory + "/" + field_str + "-" + chip_str      \
                                                      + "_psf_coadd_rrl_data.txt"
         if not rrl_data_flag:
@@ -79,7 +81,7 @@ imag_mask = rrl_data["I_mag"]>0
 
 P_0 = 0.52853966619770265
 
-rrl_fundamental_periods = where(rrl_data["type"]=="RRc", rrl_data["period"]+0.127, rrl_data["period"])
+rrl_fundamental_periods = where(rrl_data["type"]=="RRc",  10**(log10(rrl_data["period"])+0.127), rrl_data["period"])
 
 rrl_log_normalized_fundamental_periods = log10(rrl_fundamental_periods/P_0)
 
@@ -109,7 +111,7 @@ z_calibrated_M_0_err = 0.0539
 
 V_M_0, V_M_0_err, V_alpha, V_alpha_err, V_fit_mask = fit_line(rrl_log_normalized_fundamental_periods[vmag_mask], rrl_data["V_mag"][vmag_mask])
 I_M_0, I_M_0_err, I_alpha, I_alpha_err, I_fit_mask = fit_line(rrl_log_normalized_fundamental_periods[imag_mask], rrl_data["I_mag"][imag_mask])
-z_M_0, z_M_0_err, z_alpha, z_alpha_err, z_fit_mask = fit_line(rrl_log_normalized_fundamental_periods, rrl_data["z_mag"])
+z_M_0, z_M_0_err, z_alpha, z_alpha_err, z_fit_mask = fit_line(rrl_log_normalized_fundamental_periods, rrl_data["sdss_z_mag"])
 
 V_mu = V_M_0 - V_calibrated_M_0
 V_mu_err = hypot(V_calibrated_M_0_err, V_M_0_err)
@@ -133,15 +135,13 @@ def compute_distance(mu, mu_err, A=0, A_err=0):
     dist_err = dist_fract_err * dist
     return dist, dist_err
 
-# Is this correct? We are still off by about 3.6 mags
-z_M_0_decam = z_M_0
-z_M_0_sdss = z_M_0_decam - 2.5*log10(3564.727/2242.5)
-z_mu_sdss = z_M_0_sdss - z_calibrated_M_0
-
 V_dist, V_dist_err =  compute_distance(V_mu, V_mu_err)
 I_dist, I_dist_err =  compute_distance(I_mu, I_mu_err)
-z_dist, z_dist_err = compute_distance(z_mu_sdss, z_mu_err)
+z_dist, z_dist_err = compute_distance(z_mu, z_mu_err)
 
+
+V_plot_offset = -4.0
+I_plot_offset = -1.6
 
 fig = plt.figure(figsize = (3.3, 2.5))
 ax1 = subplot(111)
@@ -149,27 +149,27 @@ ax1 = subplot(111)
 xgrid = linspace(-0.4, 0.4, 1000)
 logp_xgrid = log10(P_0*(10**xgrid))
 
-ax1.errorbar(log10(rrl_fundamental_periods[vmag_mask][invert(V_fit_mask)]), rrl_data["V_mag"][vmag_mask][invert(V_fit_mask)]-2.0,
+ax1.errorbar(log10(rrl_fundamental_periods[vmag_mask][invert(V_fit_mask)]), rrl_data["V_mag"][vmag_mask][invert(V_fit_mask)]+V_plot_offset,
     linestyle="none", marker="x", ms=3, color="blue", alpha=0.3)
 
-ax1.errorbar(log10(rrl_fundamental_periods[imag_mask][invert(I_fit_mask)]), rrl_data["I_mag"][imag_mask][invert(I_fit_mask)]+0.8,
+ax1.errorbar(log10(rrl_fundamental_periods[imag_mask][invert(I_fit_mask)]), rrl_data["I_mag"][imag_mask][invert(I_fit_mask)]+I_plot_offset,
     linestyle="none", marker="x", ms=3, color="green", alpha=0.3)
 
-ax1.errorbar(log10(rrl_fundamental_periods[invert(z_fit_mask)]), rrl_data["z_mag"][invert(z_fit_mask)], rrl_data["z_magerr"][invert(z_fit_mask)],
+ax1.errorbar(log10(rrl_fundamental_periods[invert(z_fit_mask)]), rrl_data["sdss_z_mag"][invert(z_fit_mask)], rrl_data["sdss_z_magerr"][invert(z_fit_mask)],
     linestyle="none", marker="x", ms=3, color="red", alpha=0.3)
 
-ax1.errorbar(log10(rrl_fundamental_periods[vmag_mask][V_fit_mask]), rrl_data["V_mag"][vmag_mask][V_fit_mask]-2.0,
-    linestyle="none", marker="s", ms=3, color="blue", label=r"$V-2.0$", alpha=0.3)
+ax1.errorbar(log10(rrl_fundamental_periods[vmag_mask][V_fit_mask]), rrl_data["V_mag"][vmag_mask][V_fit_mask]+V_plot_offset,
+    linestyle="none", marker="s", ms=3, color="blue", label=r"$V-%.1f$" % (-1*V_plot_offset), alpha=0.3)
 
-ax1.errorbar(log10(rrl_fundamental_periods[imag_mask][I_fit_mask]), rrl_data["I_mag"][imag_mask][I_fit_mask]+0.8,
-    linestyle="none", marker="s", ms=3, color="green", label=r"$I+0.8$", alpha=0.3)
+ax1.errorbar(log10(rrl_fundamental_periods[imag_mask][I_fit_mask]), rrl_data["I_mag"][imag_mask][I_fit_mask]+I_plot_offset,
+    linestyle="none", marker="s", ms=3, color="green", label=r"$I-%.1f$" % (-1*I_plot_offset), alpha=0.3)
 
-ax1.errorbar(log10(rrl_fundamental_periods[z_fit_mask]), rrl_data["z_mag"][z_fit_mask], rrl_data["z_magerr"][z_fit_mask],
-    linestyle="none", marker="s", ms=3, color="red", label=r"$z$", alpha=0.3)
+ax1.errorbar(log10(rrl_fundamental_periods[z_fit_mask]), rrl_data["sdss_z_mag"][z_fit_mask], rrl_data["sdss_z_magerr"][z_fit_mask],
+    linestyle="none", marker="s", ms=3, color="red", label=r"$z_{\rm SDSS}$", alpha=0.3)
 
 
-ax1.plot(logp_xgrid, V_M_0 + V_alpha*xgrid - 2.0, color="k")
-ax1.plot(logp_xgrid, I_M_0 + I_alpha*xgrid + 0.8, color="k")
+ax1.plot(logp_xgrid, V_M_0 + V_alpha*xgrid + V_plot_offset, color="k")
+ax1.plot(logp_xgrid, I_M_0 + I_alpha*xgrid + I_plot_offset, color="k")
 ax1.plot(logp_xgrid, z_M_0 + z_alpha*xgrid, color="k")
 
 
@@ -189,9 +189,15 @@ ax1.yaxis.set_minor_locator(minorLocator_y1)
 ax1.set_xlabel(r"$\log_{10}\left({\rm Period [d]}\right)$", labelpad=2)
 ax1.set_ylabel(r"$m$ $+$ offset")
 
-ax1.set_ylim(24.5, 15.8)
+ax1.text(0.03, 0.64, r"$V_{P=%.3f}=%.3f$" % (P_0, V_M_0), horizontalalignment='left', verticalalignment='bottom', transform=ax1.transAxes, fontsize=8)
+
+ax1.text(0.03, 0.38, r"$I_{P=%.3f}=%.3f$" % (P_0, I_M_0), horizontalalignment='left', verticalalignment='bottom', transform=ax1.transAxes, fontsize=8)
+
+ax1.text(0.03, 0.10, r"$z_{P=%.3f}=%.3f$" % (P_0, z_M_0), horizontalalignment='left', verticalalignment='bottom', transform=ax1.transAxes, fontsize=8)
+
+ax1.set_ylim(21.0, 13.8)
 # ax1.set_xlim(-0.620, 0.011)
-ax1.set_xlim(-0.5, -0.05)
+ax1.set_xlim(-0.5, -0.08)
 
 # pos =         [left, bottom, width, height]
 ax1.set_position([0.18, 0.190, 0.79, 0.79])

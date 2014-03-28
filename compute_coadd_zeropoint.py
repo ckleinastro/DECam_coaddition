@@ -59,24 +59,51 @@ def mad_clipping_mask(input_data, sigma_clip_level):
     low_sigma_clip_limit = medval - sigma_clip_level * sigma
     return (input_data>(low_sigma_clip_limit)) & (input_data<(high_sigma_clip_limit))
 
+def rrl_decam_z_to_sloan_z(decam_z, decam_z_err, period, color_coefficient):
+    sdss_z = decam_z + color_coefficient*(-0.1827+0.2301*period)
+    # This equation is derived from earlier PLR work, from the code that fits the SEDs
+    sdss_z_err = hypot(decam_z_err, color_coefficient*(0.14))
+    return sdss_z, sdss_z_err
 
 
-
-
+"""
+Zero-point (zpt)
+Color term (ciz)
+Airmass term (cam)
+Delta x term (cdx)
+Delta y term (cdy)
+RMS for fit (well, robust scatter actually)
+Number of stars rejected in clipping
+Date
+Photometric Flat (1 = Good, 0 = bad)
+"""
 
 
 # Read in the absolute photometric zeropoints (provided by Brad, using Adam's
 # code to solve for the zeropoints from standard field observations) 
 zpt = []
+ciz = []
+cam = []
+cdx = []
+cdy = []
 std_dates = []
 standard_field_datafile = file("/Users/cklein/Desktop/Ongoing_Research/DECam_Science_Verification/des_pcal/des_pcal.%s.dat" % query_chip[1:], "r")
 for line in standard_field_datafile:
     if line.split()[-1] == "1":
         if line.split()[7] not in ["20121109", "20121110"]:
-            zpt.append(float(line.split()[0]))
+            zpt.append(float(line.split()[0]) - 2.94022814764)
+            # subtract 2.5 * log10(15.0) = 2.940 because the standard field
+            # observations were 15 sec and the target observations were 1 sec.
+            ciz.append(float(line.split()[1]))
+            cam.append(float(line.split()[2]))
+            cdx.append(float(line.split()[3]))
+            cdy.append(float(line.split()[4]))
             std_dates.append(line.split()[7])
 zpt = array(zpt)
-
+ciz = array(ciz)
+cam = array(cam)
+cdx = array(cdx)
+cdy = array(cdy)
 
 # Read in the relative zeropoint data produced during the image coaddition 
 # process (coadd_images.py)
@@ -135,7 +162,8 @@ for n in range(len(std_dates)):
             rel_compared_data.append([zpt[n],
                                       rel_airmasses[m], 
                                       rel_psf_zps[m], rel_psf_zp_errs[m], 
-                                      rel_aper_zps[m], rel_aper_zp_errs[m]])
+                                      rel_aper_zps[m], rel_aper_zp_errs[m],
+                                      ciz[n], cam[n], cdx[n], cdy[n]])
             filepath_strs.append(image_paths[m])
 rel_compared_data = array(rel_compared_data)
 
@@ -146,13 +174,20 @@ rel_compared_data = array(rel_compared_data)
 3   psf_zp_err
 4   aper_zp
 5   aper_zp_err
+6   ciz
+7   cam
+8   cdx
+9   cdy
 """
+
+
 
 translation_constant = -1*median(rel_compared_data[:,2] - rel_compared_data[:,0])
 translated_std_zpts = rel_compared_data[:,0] - translation_constant
 
 error_in_median_zp = (1/((1/rel_compared_data[:,3][rel_compared_data[:,3]!=0])**2).sum())**0.5
 rms_about_median_zp = (((rel_compared_data[:,2]-translated_std_zpts)**2).mean())**0.5
+
 
 # Read in the coordinates of the calibrator stars
 calibrator_coords = []
@@ -367,10 +402,6 @@ for n in range(len(sex_ra)):
             rrl_I = rrl_data["I_mag"]
             rrl_per = rrl_data["period"]
             output_rrl_data.append((rrl_ra, rrl_dec, ogle_id, rrl_per, rrl_V, rrl_I, star_psfmag_z, star_psfmagerr_z, rrl_type, rrl_distance_array.min()))
-#             output_region_file.write(('''circle(%f,%f,0.75") # color=cyan ''' + 
-#                 "width=1\n") % (rrl_ra, rrl_dec))
-#             output_region_file.write(("#text(%f,%f) text={RRL_P = %.3f (%s)} color=cyan\n") % 
-#                 (star_ra, star_dec, rrl_per, rrl_type))
         else:
             psf_mags.append(star_psfmag_z)
             psf_magerrs.append(star_psfmagerr_z)
@@ -393,6 +424,10 @@ mag_sigmas = mag_sigmas[mad_clipping_mask(mag_sigmas, 3)]
 
 rrl_psf_mags = []
 rrl_psf_magerrs = []
+
+if len(output_rrl_data) == 0:
+    print "No RRLs detected in Field %s Chip %s, exiting." % (query_field, query_chip)
+    sys.exit()
 
 set_of_ogle_ids = set(array(output_rrl_data)[:,2])
 
@@ -422,10 +457,21 @@ for ogle_id in unique_list_of_ogle_ids:
     output_region_file.write(("#text(%f,%f) text={z = %.3f +/- %.3f} color=cyan\n") % 
         (rrl_row[0], rrl_row[1]-0.15/3600, rrl_row[6], rrl_row[7]))
     
-    if rrl_row[8] == "RRab":
-        output_rrl_datafile.write("%.7f\t%.7f\t%s\t%s\t%.5f\t%.3f\t%.3f\t%.3f\t%.3f\n" % (rrl_row[0], rrl_row[1], rrl_row[2], rrl_row[8], rrl_row[3], rrl_row[4], rrl_row[5], rrl_row[6], rrl_row[7]))
+    period = rrl_row[3]
+    if rrl_row[8] == "RRc":
+        fundamental_period = 10**(log10(period)+0.127)
     else:
-        output_rrl_datafile.write("%.7f\t%.7f\t%s\t%s\t\t%.5f\t%.3f\t%.3f\t%.3f\t%.3f\n" % (rrl_row[0], rrl_row[1], rrl_row[2], rrl_row[8], rrl_row[3], rrl_row[4], rrl_row[5], rrl_row[6], rrl_row[7]))
+        fundamental_period = period
+    
+    decam_z_mag = rrl_row[6]
+    decam_z_magerr = rrl_row[7]
+    
+    sdss_z, sdss_z_err = rrl_decam_z_to_sloan_z(decam_z_mag, decam_z_magerr, fundamental_period, ciz.mean())
+    
+    if rrl_row[8] == "RRab":
+        output_rrl_datafile.write("%.7f\t%.7f\t%s\t%s\t%.5f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\n" % (rrl_row[0], rrl_row[1], rrl_row[2], rrl_row[8], rrl_row[3], rrl_row[4], rrl_row[5], rrl_row[6], rrl_row[7], sdss_z, sdss_z_err))
+    else:
+        output_rrl_datafile.write("%.7f\t%.7f\t%s\t%s\t\t%.5f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\n" % (rrl_row[0], rrl_row[1], rrl_row[2], rrl_row[8], rrl_row[3], rrl_row[4], rrl_row[5], rrl_row[6], rrl_row[7], sdss_z, sdss_z_err))
 
 output_rrl_datafile.close()
 output_region_file.close()
@@ -470,11 +516,11 @@ minorLocator_y1 = MultipleLocator(0.01)
 ax1.yaxis.set_major_locator(majorLocator_y1)
 ax1.yaxis.set_minor_locator(minorLocator_y1)
 
-ax1.set_xlabel(r"$z$")
+ax1.set_xlabel(r"$z$ (DECam filter)")
 ax1.set_ylabel(r"$\sigma_z$") 
 
 ax1.set_ylim(-0.004, 0.11)
-ax1.set_xlim(13.8, 23.25)
+ax1.set_xlim(10.85, 20.3)
 
 # pos =         [left, bottom, width, height]
 ax1.set_position([0.18, 0.190, 0.79, 0.79])
