@@ -1,5 +1,5 @@
 import sys
-from scipy import loadtxt, median, array, dtype, where, hypot, cos
+from scipy import loadtxt, median, array, dtype, where, hypot, cos, log10
 import pickle
 import socket
 from os import system
@@ -13,6 +13,8 @@ if len(sys.argv) != 3:
     sys.exit()
 query_field = sys.argv[1]
 query_chip = sys.argv[2]
+
+print "Starting Field", query_field, query_chip
 
 # query_field = "100"
 # query_chip = "C21"
@@ -60,9 +62,9 @@ def mad_clipping_mask(input_data, sigma_clip_level):
     return (input_data>(low_sigma_clip_limit)) & (input_data<(high_sigma_clip_limit))
 
 def rrl_decam_z_to_sloan_z(decam_z, decam_z_err, period, color_coefficient):
-    sdss_z = decam_z + color_coefficient*(-0.1827+0.2301*period)
-    # This equation is derived from earlier PLR work, from the code that fits the SEDs
-    sdss_z_err = hypot(decam_z_err, color_coefficient*(0.14))
+    sdss_z = decam_z + color_coefficient*(-0.1130463100636349+0.18236312304675537*period)
+    # This equation is derived from sesar et al. 2010 SDSS mean-flux magnitudes
+    sdss_z_err = hypot(decam_z_err, color_coefficient*(0.013))
     return sdss_z, sdss_z_err
 
 
@@ -84,26 +86,21 @@ Photometric Flat (1 = Good, 0 = bad)
 zpt = []
 ciz = []
 cam = []
-cdx = []
-cdy = []
+zp_rms = []
 std_dates = []
 standard_field_datafile = file("/Users/cklein/Desktop/Ongoing_Research/DECam_Science_Verification/des_pcal/des_pcal.%s.dat" % query_chip[1:], "r")
 for line in standard_field_datafile:
-    if line.split()[-1] == "1":
-        if line.split()[7] not in ["20121109", "20121110"]:
-            zpt.append(float(line.split()[0]) - 2.94022814764)
-            # subtract 2.5 * log10(15.0) = 2.940 because the standard field
-            # observations were 15 sec and the target observations were 1 sec.
+    if line.split()[-1] == "1" and line.split()[0][0]!="-":
+        if line.split()[5] not in ["20121109", "20121110"]:
+            zpt.append(float(line.split()[0]))
             ciz.append(float(line.split()[1]))
             cam.append(float(line.split()[2]))
-            cdx.append(float(line.split()[3]))
-            cdy.append(float(line.split()[4]))
-            std_dates.append(line.split()[7])
+            zp_rms.append(float(line.split()[3]))
+            std_dates.append(line.split()[5])
 zpt = array(zpt)
 ciz = array(ciz)
 cam = array(cam)
-cdx = array(cdx)
-cdy = array(cdy)
+zp_rms = array(zp_rms)
 
 # Read in the relative zeropoint data produced during the image coaddition 
 # process (coadd_images.py)
@@ -163,7 +160,7 @@ for n in range(len(std_dates)):
                                       rel_airmasses[m], 
                                       rel_psf_zps[m], rel_psf_zp_errs[m], 
                                       rel_aper_zps[m], rel_aper_zp_errs[m],
-                                      ciz[n], cam[n], cdx[n], cdy[n]])
+                                      ciz[n], cam[n], zp_rms[n]])
             filepath_strs.append(image_paths[m])
 rel_compared_data = array(rel_compared_data)
 
@@ -176,17 +173,16 @@ rel_compared_data = array(rel_compared_data)
 5   aper_zp_err
 6   ciz
 7   cam
-8   cdx
-9   cdy
+8   zp_rms
 """
 
 
 
-translation_constant = -1*median(rel_compared_data[:,2] - rel_compared_data[:,0])
-translated_std_zpts = rel_compared_data[:,0] - translation_constant
-
-error_in_median_zp = (1/((1/rel_compared_data[:,3][rel_compared_data[:,3]!=0])**2).sum())**0.5
-rms_about_median_zp = (((rel_compared_data[:,2]-translated_std_zpts)**2).mean())**0.5
+# translation_constant = -1*median(rel_compared_data[:,2] - rel_compared_data[:,0])
+# translated_std_zpts = rel_compared_data[:,0] - translation_constant
+# 
+# error_in_median_zp = (1/((1/rel_compared_data[:,3][rel_compared_data[:,3]!=0])**2).sum())**0.5
+# rms_about_median_zp = (((rel_compared_data[:,2]-translated_std_zpts)**2).mean())**0.5
 
 
 # Read in the coordinates of the calibrator stars
@@ -203,14 +199,39 @@ for line in calibrator_regionfile:
 calibrator_regionfile.close()
 calibrator_coords = array(calibrator_coords)
 
+# absolute_photometry = {}
+# for cal_coord in calibrator_coords:
+#     absolute_photometry[tuple(cal_coord.tolist())] = []
+
+# for n in range(len(filepath_strs)):
+#     image_path = filepath_strs[n]
+#     absolute_zeropoint = translation_constant - rel_compared_data[:,2][n]
+#     # calibrated_photometry = instrumental_mag + absolute_zeropoint
+#     relative_photometry = loadtxt(image_path.replace(".fits",                  \
+#                                                             ".calibrators.txt"))
+#     for m in range(len(calibrator_coords)):
+#         cal_ra = calibrator_coords[m][0]
+#         cal_dec = calibrator_coords[m][1]
+# 
+#         distance_array = 3600*hypot(cos(cal_dec*0.01745329252)*(cal_ra-relative_photometry[:,0]),           \
+#                                                cal_dec-relative_photometry[:,1])
+#         # if this detected star is within 2 arcsec of a identified calibrator,
+#         # then write it out
+#         if distance_array.min() < 2:
+#             rel_row = relative_photometry[                                     \
+#                             where(distance_array == distance_array.min())[0][0]]
+#             absolute_photometry[tuple(calibrator_coords[m].tolist())].append(  \
+#                     (n, rel_row[2] + absolute_zeropoint,                       \
+#                     hypot(rel_row[3], rms_about_median_zp)))
+
 absolute_photometry = {}
 for cal_coord in calibrator_coords:
     absolute_photometry[tuple(cal_coord.tolist())] = []
-
 for n in range(len(filepath_strs)):
     image_path = filepath_strs[n]
-    absolute_zeropoint = translation_constant - rel_compared_data[:,2][n]
-    # calibrated_photometry = instrumental_mag + absolute_zeropoint
+    # z_DECam = z_inst + zpt + c2 * (airmass - 1.0)
+    absolute_zeropoint = rel_compared_data[:,0][n] + rel_compared_data[:,7][n]*(rel_compared_data[:,1][n]-1.0)
+    absolute_zp_rms = rel_compared_data[:,8][n]
     relative_photometry = loadtxt(image_path.replace(".fits",                  \
                                                             ".calibrators.txt"))
     for m in range(len(calibrator_coords)):
@@ -226,21 +247,27 @@ for n in range(len(filepath_strs)):
                             where(distance_array == distance_array.min())[0][0]]
             absolute_photometry[tuple(calibrator_coords[m].tolist())].append(  \
                     (n, rel_row[2] + absolute_zeropoint,                       \
-                    hypot(rel_row[3], rms_about_median_zp)))
+                    hypot(rel_row[3], absolute_zp_rms)))
 
-
-
-
+good_calibrator_coords = []
+array_of_calibrator_stds = []
+for cal_coord in calibrator_coords:
+    if (len(array(absolute_photometry[tuple(cal_coord.tolist())])[:,1]) > 3) and (array(absolute_photometry[tuple(cal_coord.tolist())])[:,1].std() < 0.1):
+        array_of_calibrator_stds.append(array(absolute_photometry[tuple(cal_coord.tolist())])[:,1].std())
+        good_calibrator_coords.append(cal_coord.tolist())
+array_of_calibrator_stds = array(array_of_calibrator_stds)
+# print median(array_of_calibrator_stds)
 
 absolute_calibrator_photometry = []
-for cal_coord in calibrator_coords:
-    light_curve = array(absolute_photometry[tuple(cal_coord.tolist())])
-    # remove outliers using mad_clipping_mask
-    light_curve = light_curve[mad_clipping_mask(light_curve[:,1], 3)]
-    mean_mag = light_curve[:,1].mean()
-    error_about_mean = (1.0/(((1.0/light_curve[:,2])**2).sum()))**0.5
-    absolute_calibrator_photometry.append((cal_coord[0], cal_coord[1],         \
-                                                    mean_mag, error_about_mean))
+for cal_coord in good_calibrator_coords:
+    light_curve = array(absolute_photometry[tuple(cal_coord)])
+    if len(light_curve) > 3:
+        # remove outliers using mad_clipping_mask
+        # light_curve = light_curve[mad_clipping_mask(light_curve[:,1], 3)]
+        mean_mag = light_curve[:,1].mean()
+        error_about_mean = (1.0/(((1.0/light_curve[:,2])**2).sum()))**0.5
+        absolute_calibrator_photometry.append((cal_coord[0], cal_coord[1],         \
+                                                        mean_mag, error_about_mean))
 absolute_calibrator_photometry = array(absolute_calibrator_photometry)
 
 
